@@ -10,3 +10,5 @@ wheels/
 .venv
 
 data/
+data.pt
+link_probability.pt
