@@ -12,3 +12,4 @@ wheels/
 data/
 data.pt
 link_probability.pt
+wandb/
