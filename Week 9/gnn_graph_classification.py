@@ -14,11 +14,12 @@ def drawnow():
     plt.gcf().canvas.flush_events()
 
 # %% Device
-device = 'cpu'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
 
 # %% Load the MUTAG dataset
 # Load data
-dataset = TUDataset(root='./data/', name='MUTAG').to(device)
+dataset = TUDataset(root='./data/', name='MUTAG')
 node_feature_dim = 7
 
 # Split into training and validation
@@ -117,7 +118,7 @@ class SimpleGNN(torch.nn.Module):
             aggregated = aggregated.index_add(0, edge_index[1], message[edge_index[0]])
 
             # Update states
-            state = state + self.update_net[r](aggregated, state)
+            state = self.update_net[r](aggregated, state)
 
         # Aggretate: Sum node features
         graph_state = x.new_zeros((num_graphs, self.state_dim))
@@ -127,126 +128,131 @@ class SimpleGNN(torch.nn.Module):
         out = self.output_net(graph_state).flatten()
         return out
 
-# 1. Define the Sweep Configuration
-# 'bayes' is much smarter than 'grid'. It uses previous runs to guess where the lowest loss is.
-sweep_config = {
-    'method': 'bayes', 
-    'epochs': {'value': 1000},
-    'metric': {
-        'name': 'val_loss',
-        'goal': 'minimize'   
-    },
-    'parameters': {
-        'state_dim': {'values': [16, 32, 64]},
-        'num_message_passing_rounds': {'values': [2, 3, 4, 5]},
-        'learning_rate': {'distribution': 'log_uniform_values', 'min': 1e-4, 'max': 5e-2},
-        'weight_decay': {'distribution': 'log_uniform_values', 'min': 1e-6, 'max': 1e-3},
-        'dropout_rate': {'values': [0.0, 0.3, 0.5, 0.7]}
-    }
-}
+# # 1. Define the Sweep Configuration
+# # 'bayes' is much smarter than 'grid'. It uses previous runs to guess where the lowest loss is.
+# sweep_config = {
+#     'method': 'bayes',
+#     'metric': {
+#         'name': 'val_loss',
+#         'goal': 'minimize'   
+#     },
+#     'parameters': {
+#         'state_dim': {'values': [16, 32, 64]},
+#         'epochs': {'value': 1000},
+#         'num_message_passing_rounds': {'values': [2, 3, 4, 5]},
+#         'learning_rate': {'distribution': 'log_uniform_values', 'min': 1e-4, 'max': 5e-2},
+#         'weight_decay': {'distribution': 'log_uniform_values', 'min': 1e-6, 'max': 1e-3},
+#         'dropout_rate': {'values': [0.0, 0.3, 0.5, 0.7]}
+#     }
+# }
 
-# (Note: You must update your SimpleGNN __init__ to accept 'dropout_rate' 
-# and pass it to your torch.nn.Dropout layers!)
+# # (Note: You must update your SimpleGNN __init__ to accept 'dropout_rate' 
+# # and pass it to your torch.nn.Dropout layers!)
 
-# 2. Wrap your training loop in a single function
-def train_sweep():
-    # Initialize a new wandb run
-    wandb.init()
+# # 2. Wrap your training loop in a single function
+# def train_sweep():
+#     # Initialize a new wandb run
+#     wandb.init()
     
-    # WandB injects the hyperparameters for this specific run here
-    config = wandb.config
+#     # WandB injects the hyperparameters for this specific run here
+#     config = wandb.config
     
-    model = SimpleGNN(
-        node_feature_dim=node_feature_dim, 
-        state_dim=config.state_dim, 
-        num_message_passing_rounds=config.num_message_passing_rounds,
-        dropout_rate=config.dropout_rate # Make sure you added this to SimpleGNN!
-    ).to(device)
+#     model = SimpleGNN(
+#         node_feature_dim=node_feature_dim, 
+#         state_dim=config.state_dim, 
+#         num_message_passing_rounds=config.num_message_passing_rounds,
+#         dropout_rate=config.dropout_rate # Make sure you added this to SimpleGNN!
+#     ).to(device)
     
-    cross_entropy = torch.nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
+#     cross_entropy = torch.nn.BCEWithLogitsLoss()
+#     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+#     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
     
-    epochs = 400
-    
-    for epoch in range(epochs):
-        # --- TRAINING ---
-        model.train()
-        train_accuracy, train_loss = 0., 0.
-        for data in train_loader:
-            out = model(data.x, data.edge_index, batch=data.batch)
-            loss = cross_entropy(out, data.y.float())
+#     epochs = config.epochs
+
+#     for epoch in range(epochs):
+#         # --- TRAINING ---
+#         model.train()
+#         train_accuracy, train_loss = 0., 0.
+#         for data in train_loader:
+#             data = data.to(device)
+#             out = model(data.x, data.edge_index, batch=data.batch)
+#             loss = cross_entropy(out, data.y.float())
             
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+#             optimizer.zero_grad()
+#             loss.backward()
+#             optimizer.step()
             
-            train_accuracy += sum((out>0) == data.y).detach().cpu() / len(train_loader.dataset)
-            train_loss += loss.detach().cpu().item() * data.batch_size / len(train_loader.dataset)
+#             train_accuracy += sum((out>0) == data.y).detach().cpu() / len(train_loader.dataset)
+#             train_loss += loss.detach().cpu().item() * data.batch_size / len(train_loader.dataset)
             
-        scheduler.step()
+#         scheduler.step()
         
-        # --- VALIDATION ---
-        model.eval()
-        validation_loss, validation_accuracy = 0., 0.
-        with torch.no_grad():
-            for data in validation_loader:
-                out = model(data.x, data.edge_index, data.batch)
-                validation_accuracy += sum((out>0) == data.y).cpu() / len(validation_loader.dataset)
-                validation_loss += cross_entropy(out, data.y.float()).cpu().item() * data.batch_size / len(validation_loader.dataset)
+#         # --- VALIDATION ---
+#         model.eval()
+#         validation_loss, validation_accuracy = 0., 0.
+#         with torch.no_grad():
+#             for data in validation_loader:
+#                 data = data.to(device)
+#                 out = model(data.x, data.edge_index, data.batch)
+#                 validation_accuracy += sum((out>0) == data.y).cpu() / len(validation_loader.dataset)
+#                 validation_loss += cross_entropy(out, data.y.float()).cpu().item() * data.batch_size / len(validation_loader.dataset)
         
-        # 3. Log metrics to WandB instead of Matplotlib
-        wandb.log({
-            'epoch': epoch,
-            'train_loss': train_loss,
-            'train_acc': train_accuracy,
-            'val_loss': validation_loss,
-            'val_acc': validation_accuracy,
-            'lr': scheduler.get_last_lr()[0]
-        })
+#         # 3. Log metrics to WandB instead of Matplotlib
+#         wandb.log({
+#             'epoch': epoch,
+#             'train_loss': train_loss,
+#             'train_acc': train_accuracy,
+#             'val_loss': validation_loss,
+#             'val_acc': validation_accuracy,
+#             'lr': scheduler.get_last_lr()[0]
+#         })
 
-# 4. Initialize and run the sweep
-# This will run 30 different combinations, using Bayesian optimization to find the best one
-sweep_id = wandb.sweep(sweep_config, project="gnn-mutag-sweep")
-wandb.agent(sweep_id, train_sweep, count=30)
+# # 4. Initialize and run the sweep
+# # This will run 30 different combinations, using Bayesian optimization to find the best one
+# sweep_id = wandb.sweep(sweep_config, project="gnn-mutag-sweep")
+# wandb.agent(sweep_id, train_sweep, count=30)
 
-# # ==========================================
-# # FINAL RUN (Run this AFTER the sweep finds the best parameters)
-# # ==========================================
+# ==========================================
+# FINAL RUN (Run this AFTER the sweep finds the best parameters)
+# ==========================================
 
-# # 1. Hardcode your winning parameters from the WandB dashboard here:
-# best_state_dim = 32 # (Replace with your winner)
-# best_rounds = 3 # (Replace with your winner)
-# best_dropout = 0.5 # (Replace with your winner)
-# best_lr = 0.01 # (Replace with your winner)
-# best_wd = 1e-4 # (Replace with your winner)
-# best_epochs = 200 # (Look at WandB: what epoch hit the lowest val_loss before it started rising?)
+# 1. Hardcode your winning parameters from the WandB dashboard here:
+best_state_dim = 64 # (Replace with your winner)
+best_rounds = 5 # (Replace with your winner)
+best_dropout = 0.3 # (Replace with your winner)
+best_lr = 0.000185696208571603 # (Replace with your winner)
+best_wd = 0.000757386170593012 # (Replace with your winner)
+best_epochs = 536 # (Look at WandB: what epoch hit the lowest val_loss before it started rising?)
 
-# print("Training final model with best hyperparameters...")
+print("Training final model with best hyperparameters...")
 
-# # 2. Initialize the final model
-# final_model = SimpleGNN(node_feature_dim, best_state_dim, best_rounds, best_dropout).to(device)
-# cross_entropy = torch.nn.BCEWithLogitsLoss()
-# optimizer = torch.optim.Adam(final_model.parameters(), lr=best_lr, weight_decay=best_wd)
-# scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
+# 2. Initialize the final model
+final_model = SimpleGNN(node_feature_dim, best_state_dim, best_rounds, best_dropout).to(device)
+cross_entropy = torch.nn.BCEWithLogitsLoss()
+optimizer = torch.optim.Adam(final_model.parameters(), lr=best_lr, weight_decay=best_wd)
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
 
-# # 3. Train strictly on the train_loader (respecting the split constraints)
-# for epoch in range(best_epochs):
-#     final_model.train()
-#     for data in train_loader:
-#         out = final_model(data.x, data.edge_index, batch=data.batch)
-#         loss = cross_entropy(out, data.y.float())
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
-#     scheduler.step()
+# 3. Train strictly on the train_loader (respecting the split constraints)
+for epoch in range(best_epochs):
+    final_model.train()
+    for data in train_loader:
+        data = data.to(device)
+        out = final_model(data.x, data.edge_index, batch=data.batch)
+        loss = cross_entropy(out, data.y.float())
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    print(loss)
+    scheduler.step()
 
-# # 4. Save final predictions (The ONLY time we look at the test set)
-# print("Saving final predictions...")
-# final_model.eval()
-# with torch.no_grad():
-#     test_data = next(iter(test_loader))
-#     out = final_model(test_data.x, test_data.edge_index, test_data.batch).cpu()
-#     torch.save(out, 'test_predictions.pt')
+# 4. Save final predictions (The ONLY time we look at the test set)
+print("Saving final predictions...")
+final_model.eval()
+with torch.no_grad():
+    
+    test_data = next(iter(test_loader)).to(device)
+    out = final_model(test_data.x, test_data.edge_index, test_data.batch).cpu()
+    torch.save(out, 'test_predictions.pt')
 
-# print("Done! Ready to submit.")
+print("Done! Ready to submit.")
