@@ -134,10 +134,14 @@ if __name__ == "__main__":
     import argparse
     import matplotlib.pyplot as plt
     import numpy as np
+    
+    # Import your new Unet class
+    from unet import Unet
 
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'test'], help='what to do when running the script (default: %(default)s)')
-    parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist'], help='dataset to use {tg: two Gaussians, cb: chequerboard, mnist: MNIST digits} (default: %(default)s)')
+    parser.add_argument('--data', type=str, default='tg', choices=['tg', 'cb', 'mnist'], help='dataset to use (default: %(default)s)')
+    parser.add_argument('--network', type=str, default='fc', choices=['fc', 'unet'], help='network architecture to use (default: %(default)s)')
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -152,10 +156,9 @@ if __name__ == "__main__":
 
     # 1. GENERATE THE DATA
     if args.data == 'mnist':
-        # Warn user if they are using default batch size for MNIST
         if args.batch_size == 10000:
-            print("\nWARNING: Batch size 10000 is too large for MNIST and may cause an Out Of Memory error.")
-            print("Consider running with: --batch-size 128\n")
+            print("\nWARNING: Batch size 10000 is too large for MNIST. Defaulting to 128 to prevent OOM errors.\n")
+            args.batch_size = 128
 
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -167,8 +170,8 @@ if __name__ == "__main__":
         train_data = datasets.MNIST('data/', train=True, download=True, transform=transform)
         train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
         
-        D = 784             # 28x28 flattened
-        num_hidden = 512    # Wider network for higher dimensional data
+        D = 784 
+        num_hidden = 512 
     else:
         n_data = 10000000
         toy = {'tg': ToyData.TwoGaussians, 'cb': ToyData.Chequerboard}[args.data]()
@@ -176,10 +179,18 @@ if __name__ == "__main__":
         train_loader = torch.utils.data.DataLoader(transform(toy().sample((n_data,))), batch_size=args.batch_size, shuffle=True)
         
         D = next(iter(train_loader)).shape[1]
-        num_hidden = 64     # Smaller network is sufficient for toy data
+        num_hidden = 64
 
     # 2. DEFINE THE NETWORK AND MODEL
-    network = FcNetwork(D, num_hidden)
+    if args.network == 'unet':
+        if args.data != 'mnist':
+            raise ValueError("The provided Unet is hardcoded for 28x28 MNIST images. Please use --data mnist.")
+        print("Using U-Net Architecture...")
+        network = Unet()
+    else:
+        print("Using Fully Connected Architecture...")
+        network = FcNetwork(D, num_hidden)
+        
     T = 1000
     model = DDPM(network, T=T).to(args.device)
 
@@ -194,17 +205,11 @@ if __name__ == "__main__":
         model.eval()
 
         if args.data == 'mnist':
-            # Generate 64 samples to create an 8x8 grid
             with torch.no_grad():
                 samples = model.sample((64, D)).cpu()
             
-            # Transform the samples back to [0, 1] range
             samples = samples / 2 + 0.5
-            
-            # Reshape flattened vectors back into 28x28 image matrices
             samples = samples.view(-1, 1, 28, 28)
-            
-            # Save using torchvision's save_image functionality
             save_image(samples, args.samples, nrow=8)
             print(f"Saved MNIST samples grid to {args.samples}")
 
@@ -212,10 +217,7 @@ if __name__ == "__main__":
             with torch.no_grad():
                 samples = (model.sample((10000, D))).cpu() 
 
-            # Transform the samples back to the original space
             samples = samples / 2 + 0.5
-
-            # Plot the density of the toy data and the model samples
             coordinates = [[[x,y] for x in np.linspace(*toy.xlim, 1000)] for y in np.linspace(*toy.ylim, 1000)]
             prob = torch.exp(toy().log_prob(torch.tensor(coordinates)))
 

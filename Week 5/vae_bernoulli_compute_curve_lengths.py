@@ -78,7 +78,7 @@ def plot_curve_and_manifold(model, data_loader, z_path, x_path, device):
     ax2.axis('off')
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig('curve_plot.png')
 
 class GaussianPrior(nn.Module):
     def __init__(self, M):
@@ -262,6 +262,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
+    parser.add_argument('--model', type=str, default='vae_model.pt', help='file to save or load model to/from (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
 
     args = parser.parse_args()
@@ -333,9 +334,10 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
 
         # Create an interesting curved path
-        w0 = torch.tensor([[-2.0, -2.0]]).to(device)
-        w1 = torch.tensor([[4.0, 1.0]]).to(device)
-        w2 = torch.tensor([[-1.0, 3.0]]).to(device)
+        # A parabolic curve that hits the origin at exactly t=0.5
+        w0 = torch.tensor([[-2.0, 2.0]]).to(device)  # Start top-left
+        w1 = torch.tensor([[4.0, -8.0]]).to(device)  # Velocity pulls down and right
+        w2 = torch.tensor([[0.0, 8.0]]).to(device)   # Curvature pulls back up
 
         my_curve = lambda t: latent_poly2_curve(t, w0, w1, w2)
 
